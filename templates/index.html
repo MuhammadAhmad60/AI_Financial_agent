@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Interactive Multi-Agent Business System</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    /* (Copy your existing CSS as-is) */
+    /* For brevity in this message I'll keep CSS minimal — use your original CSS here */
+    :root{--primary:#4361ee;--secondary:#3a0ca3;--success:#4cc9f0;--warning:#f72585;--light:#f8f9fa;--dark:#212529;--gray:#6c757d;--light-gray:#e9ecef}
+    *{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',Tahoma, Geneva, Verdana, sans-serif}
+    body{background:#f5f7fb;color:var(--dark);line-height:1.6;padding:20px}
+    .container{max-width:1200px;margin:0 auto}
+    header{background:linear-gradient(120deg,var(--primary),var(--secondary));color:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.1);margin-bottom:2rem}
+    .card{background:#fff;border-radius:12px;padding:2rem;margin-bottom:2rem;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+    .request-input{width:100%;padding:1.2rem;border:2px solid var(--light-gray);border-radius:8px;min-height:120px;margin-bottom:1rem}
+    .btn{padding:.9rem 1.8rem;background:var(--primary);color:#fff;border-radius:8px;border:none;cursor:pointer}
+    .agents-container{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1.5rem;margin-top:2rem}
+    .agent-card{background:#fff;border-radius:8px;padding:1.2rem;border-left:4px solid var(--primary);box-shadow:0 2px 10px rgba(0,0,0,.05)}
+    .agent-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+    .agent-name{font-weight:600}
+    .agent-status{padding:.2rem .6rem;border-radius:16px;background:var(--light-gray)}
+    .agent-output{background:var(--light);padding:.8rem;border-radius:6px;margin-top:.8rem;display:none;white-space:pre-wrap}
+    .progress-bar{height:8px;background:var(--primary);width:0%;transition:width .3s;border-radius:4px}
+    .final-result{margin-top:1.5rem;padding:1rem;background:var(--light);border-radius:8px;display:none}
+    .small-btn{padding:.3rem .6rem;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer}
+  </style>
+  <!-- Chart.js CDN for visualizer rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div style="display:flex;align-items:center;gap:12px">
+        <i class="fas fa-robot" style="font-size:1.5rem"></i>
+        <h1 style="font-size:1.25rem">Multi-Agent Business System </h1>
+      </div>
+    </header>
+
+    <div class="card">
+      <div style="margin-bottom:1rem">
+        <h2 style="margin-bottom:.25rem">Business Request Processor</h2>
+        <p>Enter your business request in plain language. Agents will run and return structured outputs.</p>
+      </div>
+
+      <div>
+        <textarea id="requestInput" class="request-input" placeholder="e.g., Summarize the last 3 quarters' financial trends and create a chart"></textarea>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="processBtn" class="btn">Process Request</button>
+          <div id="systemStatus" style="display:none;align-items:center;gap:8px">
+            <i class="fas fa-sync-alt fa-spin"></i><span>Processing...</span>
+          </div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:1.5rem">Agents</h3>
+      <div class="agents-container" id="agentsContainer"></div>
+
+      <div class="final-result" id="finalResult">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong>Final Aggregated Result</strong>
+          <small id="finalStatus"></small>
+        </div>
+        <div id="resultContent" style="margin-top:.75rem;white-space:pre-wrap"></div>
+        <canvas id="resultChart" style="max-width:700px;margin-top:12px;display:none"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // --- UI & state ---
+  const agentsDefinition = [
+    { id: 'planner', name: 'Planning Agent', description: 'Breaks request into subtasks' },
+    { id: 'data-collector', name: 'Data Collector', description: 'Collects / mocks required data' },
+    { id: 'analyzer', name: 'Data Analyzer', description: 'Analyzes data & finds insights' },
+    { id: 'visualizer', name: 'Visualization Agent', description: 'Prepares chart data' },
+    { id: 'reporter', name: 'Report Generator', description: 'Creates final report' }
+  ];
+
+  const agentsContainer = document.getElementById('agentsContainer');
+  const processBtn = document.getElementById('processBtn');
+  const requestInput = document.getElementById('requestInput');
+  const systemStatus = document.getElementById('systemStatus');
+  const finalResult = document.getElementById('finalResult');
+  const resultContent = document.getElementById('resultContent');
+  const finalStatus = document.getElementById('finalStatus');
+  const resultChart = document.getElementById('resultChart');
+  let chartInstance = null;
+  let es = null; // EventSource
+
+  // --- Render agent cards ---
+  function renderAgents(initial=true) {
+    agentsContainer.innerHTML = '';
+    agentsDefinition.forEach(agent => {
+      const card = document.createElement('div');
+      card.className = 'agent-card';
+      card.id = `agent-${agent.id}`;
+      card.innerHTML = `
+        <div class="agent-header">
+          <div>
+            <div class="agent-name">${agent.name}</div>
+            <div style="font-size:.85rem;color:#666">${agent.description}</div>
+          </div>
+          <div>
+            <span class="agent-status" id="status-${agent.id}">pending</span>
+          </div>
+        </div>
+        <div style="margin-top:.6rem;">
+          <div style="background:#eee;height:8px;border-radius:6px;overflow:hidden">
+            <div class="progress-bar" id="progress-${agent.id}"></div>
+          </div>
+        </div>
+        <div class="agent-output" id="output-${agent.id}"></div>
+        <div style="margin-top:.5rem;display:flex;gap:8px;align-items:center">
+          <button class="small-btn" id="retry-${agent.id}" style="display:none">Retry</button>
+          <button class="small-btn" id="copy-${agent.id}">Copy</button>
+        </div>
+      `;
+      agentsContainer.appendChild(card);
+
+      // hook retry/copy
+      document.getElementById(`retry-${agent.id}`).addEventListener('click', () => retryAgent(agent.id));
+      document.getElementById(`copy-${agent.id}`).addEventListener('click', () => copyAgentOutput(agent.id));
+    });
+  }
+
+  function setAgentStatus(id, status) {
+    const card = document.getElementById(`agent-${id}`);
+    if (!card) return;
+    // update border color classes (simple)
+    card.className = 'agent-card ' + (status === 'running' ? 'running' : status === 'completed' ? 'completed' : status === 'error' ? 'error' : '');
+    document.getElementById(`status-${id}`).textContent = status;
+    // show/hide retry
+    const retryBtn = document.getElementById(`retry-${id}`);
+    if (status === 'error') retryBtn.style.display = 'inline-block'; else retryBtn.style.display = 'none';
+  }
+
+  function setAgentProgress(id, percent) {
+    const bar = document.getElementById(`progress-${id}`);
+    if (bar) bar.style.width = `${percent}%`;
+  }
+
+  function setAgentOutput(id, text) {
+    const out = document.getElementById(`output-${id}`);
+    if (!out) return;
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+  }
+
+  function copyAgentOutput(id) {
+    const out = document.getElementById(`output-${id}`);
+    if (!out) return;
+    navigator.clipboard.writeText(out.textContent || '').then(() => alert('Copied output'));
+  }
+
+  // Retry logic: sends a small POST /query to ask backend to re-run just this agent?
+  // For simplicity we'll call the full SSE endpoint with a query param "run_agent" (not implemented in backend),
+  // but here we simulate retry by re-opening the SSE call and letting backend reattempt (user can press main Process).
+  // Simpler UX: retry will re-run entire request (you can improve to re-run single agent server-side).
+  function retryAgent(agentId) {
+    alert('Retrying entire request (single-agent retry not implemented server-side). Please press Process again.');
+    // If you want to implement single agent retry server-side, backend needs an endpoint like /retry_agent
+  }
+
+  // --- SSE processing ---
+  async function startProcessing() {
+    const query = requestInput.value.trim();
+    if (!query) { alert('Please enter a business request'); return; }
+
+    // prepare UI
+    processBtn.disabled = true;
+    systemStatus.style.display = 'inline-flex';
+    finalResult.style.display = 'none';
+    resultContent.textContent = '';
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; resultChart.style.display = 'none'; }
+
+    renderAgents();
+    // reset progress & status
+    agentsDefinition.forEach(a => { setAgentStatus(a.id, 'pending'); setAgentProgress(a.id, 0); setAgentOutput(a.id, ''); });
+
+    const backendUrl = `http://127.0.0.1:8000/process_sse?query=${encodeURIComponent(query)}`;
+
+    // close previous EventSource if exists
+    if (es) { es.close(); es = null; }
+
+    es = new EventSource(backendUrl);
+
+    es.addEventListener('system', ev => {
+      const d = JSON.parse(ev.data);
+      console.log('system', d);
+    });
+
+    es.addEventListener('agent_start', ev => {
+      const d = JSON.parse(ev.data);
+      setAgentStatus(d.id, 'running');
+      setAgentProgress(d.id, 5);
+      setAgentOutput(d.id, 'Starting...');
+    });
+
+    es.addEventListener('agent_progress', ev => {
+      const d = JSON.parse(ev.data);
+      if (d.progress !== undefined) setAgentProgress(d.id, d.progress);
+    });
+
+    es.addEventListener('agent_completed', ev => {
+      const d = JSON.parse(ev.data);
+      setAgentStatus(d.id, 'completed');
+      setAgentProgress(d.id, 100);
+      setAgentOutput(d.id, d.result || '[no output]');
+    });
+
+    es.addEventListener('agent_error', ev => {
+      const d = JSON.parse(ev.data);
+      setAgentStatus(d.id, 'error');
+      setAgentOutput(d.id, 'Error: ' + (d.error || 'unknown'));
+      setAgentProgress(d.id, 0);
+    });
+
+    es.addEventListener('complete', ev => {
+      const d = JSON.parse(ev.data);
+      processBtn.disabled = false;
+      systemStatus.style.display = 'none';
+      finalResult.style.display = 'block';
+      if (d.aggregate) {
+        // show aggregate text. If it's JSON-looking, try to pretty print.
+        resultContent.textContent = d.aggregate;
+        finalStatus.textContent = 'OK';
+        // try to parse chartData inside aggregate output (if reporter produced JSON)
+        try {
+          // attempt to find a JSON substring labeled chartData
+          const maybe = extractJSON(d.aggregate);
+          if (maybe && maybe.chartData) {
+            renderChart(maybe.chartData);
+          }
+        } catch (err) {
+          console.warn('chart parse issue', err);
+        }
+      } else if (d.status === 'done_with_errors' && d.error) {
+        resultContent.textContent = 'Completed with errors: ' + d.error;
+        finalStatus.textContent = 'Errors';
+      } else {
+        resultContent.textContent = 'Processing finished.';
+        finalStatus.textContent = '';
+      }
+      // close stream
+      if (es) { es.close(); es = null; }
+    });
+
+    es.onerror = (err) => {
+      console.error('SSE error', err);
+      if (es) { es.close(); es = null; }
+      processBtn.disabled = false;
+      systemStatus.style.display = 'none';
+      alert('Connection error. Make sure backend is running and CORS allows this origin.');
+    };
+  }
+
+  // Helper: attempt to find JSON in a text block (very lenient)
+  function extractJSON(text) {
+    // try to find first { ... } JSON object
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const sub = text.substring(start, end + 1);
+        return JSON.parse(sub);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // Chart rendering (expects chartData { labels: [...], series: [{name, data: [...]}, ...] })
+  function renderChart(chartData) {
+    if (!chartData || !chartData.labels || !chartData.series) return;
+    resultChart.style.display = 'block';
+    const ctx = resultChart.getContext('2d');
+    const datasets = chartData.series.map((s, idx) => ({
+      label: s.name || `Series ${idx+1}`,
+      data: s.data,
+      fill: false,
+      tension: 0.3
+    }));
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(ctx, {
+      type: 'line',
+      data: { labels: chartData.labels, datasets },
+      options: { responsive: true, maintainAspectRatio: false }
+    });
+  }
+
+  // wire button
+  processBtn.addEventListener('click', startProcessing);
+
+  // initial render
+  renderAgents();
+</script>
+</body>
+</html>
